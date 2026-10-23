@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'screens/home_shell.dart';
 import 'screens/login_screen.dart';
 import 'services/auth_service.dart';
+import 'state/app_state.dart';
 import 'theme.dart';
 
 void main() {
@@ -14,49 +15,27 @@ class PpskgApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'PPSKG',
-      debugShowCheckedModeBanner: false,
-      theme: buildTheme(Brightness.light),
-      darkTheme: buildTheme(Brightness.dark),
-      builder: (context, child) => _PhoneFrame(child: child!),
-      home: ValueListenableBuilder<AuthUser?>(
-        valueListenable: AuthService.user,
-        builder: (context, user, _) =>
-            user == null ? const LoginScreen() : const HomeShell(),
-      ),
-    );
-  }
-}
-
-/// Keeps the mobile layout on wide screens (e.g. the web version opened on a
-/// laptop) by centring the app in a phone-width column. Phones and narrow
-/// windows get the full width as before.
-class _PhoneFrame extends StatelessWidget {
-  final Widget child;
-
-  const _PhoneFrame({required this.child});
-
-  static const double maxWidth = 480;
-
-  @override
-  Widget build(BuildContext context) {
-    final media = MediaQuery.of(context);
-    if (media.size.width <= maxWidth) return child;
-    return ColoredBox(
-      color: smartBrown,
-      child: Center(
-        child: Container(
-          width: maxWidth,
-          decoration: const BoxDecoration(
-            boxShadow: [BoxShadow(color: Colors.black54, blurRadius: 24)],
-          ),
-          child: ClipRect(
-            child: MediaQuery(
-              data: media.copyWith(size: Size(maxWidth, media.size.height)),
-              child: child,
-            ),
-          ),
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: AppState.themeMode,
+      builder: (context, mode, _) => MaterialApp(
+        title: 'PPSKG',
+        debugShowCheckedModeBanner: false,
+        theme: buildTheme(Brightness.light),
+        darkTheme: buildTheme(Brightness.dark),
+        themeMode: mode,
+        // Text reads large on laptop screens, so shrink it a little there.
+        builder: (context, child) => isDesktop(context)
+            ? MediaQuery(
+                data: MediaQuery.of(context).copyWith(
+                  textScaler: const TextScaler.linear(desktopTextScale),
+                ),
+                child: child!,
+              )
+            : child!,
+        home: ValueListenableBuilder<AuthUser?>(
+          valueListenable: AuthService.user,
+          builder: (context, user, _) =>
+              user == null ? const LoginScreen() : const HomeShell(),
         ),
       ),
     );

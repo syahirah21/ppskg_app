@@ -8,6 +8,7 @@ import '../services/arcgis_service.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
 import '../widgets/negeri_picker.dart';
+import '../widgets/theme_toggle.dart';
 
 /// Approximate bounds of each state, used to frame the map. The layer's own
 /// extents can't be used: a few lots with the wrong NEGERI or misplaced
@@ -486,9 +487,15 @@ class _MapScreenState extends State<MapScreen>
                   ),
                 ],
               ),
-            SimpleAttributionWidget(
-              source: Text(_satellite ? 'Esri, RISDA' : 'OpenStreetMap, RISDA'),
-              backgroundColor: Colors.white70,
+            // Light backing, so keep the text dark in dark mode too.
+            Theme(
+              data: lightTheme,
+              child: SimpleAttributionWidget(
+                source: Text(
+                  _satellite ? 'Esri, RISDA' : 'OpenStreetMap, RISDA',
+                ),
+                backgroundColor: Colors.white70,
+              ),
             ),
           ],
         ),
@@ -500,6 +507,21 @@ class _MapScreenState extends State<MapScreen>
             children: [
               const LocationPill(solid: true),
               const Spacer(),
+              // Phones get the light/dark button here; desktop has it in
+              // the sidebar.
+              if (!isDesktop(context)) ...[
+                ValueListenableBuilder<ThemeMode>(
+                  valueListenable: AppState.themeMode,
+                  builder: (context, mode, _) => _RoundButton(
+                    icon: mode == ThemeMode.dark
+                        ? Icons.dark_mode
+                        : Icons.light_mode,
+                    tooltip: mode == ThemeMode.dark ? 'Mod cerah' : 'Mod gelap',
+                    onTap: toggleThemeMode,
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
               _RoundButton(
                 icon: _satellite ? Icons.map_outlined : Icons.satellite_alt,
                 tooltip: _satellite ? 'Peta jalan' : 'Satelit',
@@ -585,9 +607,11 @@ class _MapScreenState extends State<MapScreen>
             ],
           ),
         ),
+        // On desktop the lot card is a side card rather than full width.
         Positioned(
           left: 12,
-          right: 12,
+          right: isDesktop(context) ? null : 12,
+          width: isDesktop(context) ? 420 : null,
           bottom: 12,
           child: _lot == null
               ? const Align(alignment: Alignment.bottomLeft, child: _Legend())
@@ -605,8 +629,14 @@ class _MapScreenState extends State<MapScreen>
 class _Legend extends StatelessWidget {
   const _Legend();
 
+  // Cream background, so always use the light theme (see [lightTheme]).
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => Theme(
+    data: lightTheme,
+    child: Builder(builder: _build),
+  );
+
+  Widget _build(BuildContext context) {
     final theme = Theme.of(context);
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 10, 14, 10),
@@ -783,8 +813,14 @@ class _LotNumberDialogState extends State<_LotNumberDialog> {
     if (lot.isNotEmpty) Navigator.pop(context, lot);
   }
 
+  // Cream background, so always use the light theme (see [lightTheme]).
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => Theme(
+    data: lightTheme,
+    child: Builder(builder: _build),
+  );
+
+  Widget _build(BuildContext context) {
     return AlertDialog(
       backgroundColor: const Color(0xFFFFFDF9),
       surfaceTintColor: Colors.transparent,
@@ -878,27 +914,36 @@ class _LotCard extends StatelessWidget {
 
   const _LotCard({required this.lot, required this.onClose});
 
+  // Cream background, so always use the light theme (see [lightTheme]).
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => Theme(
+    data: lightTheme,
+    child: Builder(builder: _build),
+  );
+
+  Widget _build(BuildContext context) {
     final theme = Theme.of(context);
     final color = statusTorehanColor(lot.statusTorehan);
+    // The card is always cream, so its text is always dark ink, even when
+    // the device is in dark mode.
     Widget row(String label, String value) => Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 80,
+            width: 92,
             child: Text(
               label,
-              style: theme.textTheme.bodySmall?.copyWith(color: smartMuted),
+              style: theme.textTheme.bodyMedium?.copyWith(color: smartMuted),
             ),
           ),
           Expanded(
             child: Text(
               value,
-              style: theme.textTheme.bodySmall?.copyWith(
-                fontWeight: FontWeight.w600,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: smartInk,
+                fontWeight: FontWeight.w700,
               ),
             ),
           ),
@@ -923,14 +968,15 @@ class _LotCard extends StatelessWidget {
                     lot.nama,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      color: smartInk,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
                 ),
                 IconButton(
                   visualDensity: VisualDensity.compact,
-                  icon: const Icon(Icons.close, size: 18),
+                  icon: const Icon(Icons.close, size: 18, color: smartMuted),
                   onPressed: onClose,
                 ),
               ],

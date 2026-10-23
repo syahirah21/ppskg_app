@@ -15,6 +15,27 @@ const Color smartMuted = Color(0xFF8A7C68);
 const Color smartGreen = Color(0xFF3F8F46);
 const Color smartOrange = Color(0xFFE67E1A);
 
+/// Windows at least this wide (laptops, desktops) get the desktop layout:
+/// a sidebar instead of the bottom bar, and multi-column pages.
+const double desktopBreakpoint = 900;
+
+bool isDesktop(BuildContext context) =>
+    MediaQuery.sizeOf(context).width >= desktopBreakpoint;
+
+/// Desktop text is drawn at this fraction of its phone size.
+const double desktopTextScale = 0.88;
+
+/// Widest the desktop page content grows before it is centred.
+const double desktopContentWidth = 1200;
+
+/// Centres [child] and caps its width at [desktopContentWidth].
+Widget desktopContent(Widget child) => Center(
+  child: ConstrainedBox(
+    constraints: const BoxConstraints(maxWidth: desktopContentWidth),
+    child: child,
+  ),
+);
+
 /// Header gradient shared by every screen, like the SmartMap sidebar.
 const LinearGradient headerGradient = LinearGradient(
   colors: [smartBrown, smartBrownLight],
@@ -73,6 +94,10 @@ ThemeData buildTheme(Brightness brightness) {
     ),
   );
 }
+
+/// Always-light theme for cream cards and dialogs, so their text stays
+/// dark and readable when the device is in dark mode.
+final ThemeData lightTheme = buildTheme(Brightness.light);
 
 /// Fixed colour per STATUS_TOREHAN value so charts and chips always match.
 Color statusTorehanColor(String? status) => switch (status) {

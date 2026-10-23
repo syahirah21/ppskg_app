@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 
 import '../services/arcgis_service.dart';
 
@@ -13,4 +13,8 @@ class AppState {
   /// Every state with its national lot count, for the state picker.
   /// Includes 'Tiada data' so the all-Malaysia total matches.
   static final negeriOptions = ValueNotifier<List<GroupStat>>([]);
+
+  /// Light or dark mode, chosen with the switch in the sidebar, the
+  /// profile panel or the sun/moon button.
+  static final themeMode = ValueNotifier<ThemeMode>(ThemeMode.light);
 }

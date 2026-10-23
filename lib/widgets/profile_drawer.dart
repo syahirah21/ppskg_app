@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../services/auth_service.dart';
 import '../theme.dart';
+import 'theme_toggle.dart';
 
 /// Round gold avatar with the signed-in officer's initials, for the
 /// Dashboard header. Tapping it opens the [ProfileDrawer].
@@ -51,90 +52,94 @@ class ProfileDrawer extends StatelessWidget {
   Widget build(BuildContext context) {
     final user = AuthService.user.value;
     final bottom = MediaQuery.paddingOf(context).bottom;
-    return Drawer(
-      width: 310,
-      backgroundColor: smartCream,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.horizontal(left: Radius.circular(24)),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _ProfileHeader(user: user),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 20, 16, 16),
-              children: [
-                const _SectionLabel('Maklumat pegawai'),
-                _InfoCard(
-                  children: [
-                    _InfoTile(
-                      icon: Icons.apartment_outlined,
-                      label: 'Pejabat',
-                      value: user?.pejabat ?? '-',
-                    ),
-                    _InfoTile(
-                      icon: Icons.place_outlined,
-                      label: 'Negeri',
-                      value: user?.negeri ?? '-',
-                    ),
-                    _InfoTile(
-                      icon: Icons.mail_outline,
-                      label: 'Emel',
-                      value: user?.emel ?? '-',
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 20),
-                const _SectionLabel('Sesi'),
-                _InfoCard(
-                  children: [
-                    _InfoTile(
-                      icon: Icons.schedule,
-                      label: 'Log masuk',
-                      value: user == null ? '-' : _fmtLoginAt(user.loginAt),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          Container(
-            padding: EdgeInsets.fromLTRB(16, 12, 16, bottom + 16),
-            decoration: const BoxDecoration(
-              border: Border(top: BorderSide(color: smartBorder)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                FilledButton.icon(
-                  onPressed: () => _confirmLogout(context),
-                  icon: const Icon(Icons.logout, size: 18),
-                  label: const Text(
-                    'Log keluar',
-                    style: TextStyle(fontWeight: FontWeight.w700),
+    // Cream panel, so always use the light theme (see [lightTheme]).
+    return Theme(
+      data: lightTheme,
+      child: Drawer(
+        width: 310,
+        backgroundColor: smartCream,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.horizontal(left: Radius.circular(24)),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _ProfileHeader(user: user),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(16, 20, 16, 16),
+                children: [
+                  const _SectionLabel('Maklumat pegawai'),
+                  _InfoCard(
+                    children: [
+                      _InfoTile(
+                        icon: Icons.apartment_outlined,
+                        label: 'Pejabat',
+                        value: user?.pejabat ?? '-',
+                      ),
+                      _InfoTile(
+                        icon: Icons.place_outlined,
+                        label: 'Negeri',
+                        value: user?.negeri ?? '-',
+                      ),
+                      _InfoTile(
+                        icon: Icons.mail_outline,
+                        label: 'Emel',
+                        value: user?.emel ?? '-',
+                      ),
+                    ],
                   ),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: smartOrange.withValues(alpha: 0.1),
-                    foregroundColor: smartOrange,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+                  const SizedBox(height: 20),
+                  const _SectionLabel('Sesi'),
+                  _InfoCard(
+                    children: [
+                      _InfoTile(
+                        icon: Icons.schedule,
+                        label: 'Log masuk',
+                        value: user == null ? '-' : _fmtLoginAt(user.loginAt),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              padding: EdgeInsets.fromLTRB(16, 12, 16, bottom + 16),
+              decoration: const BoxDecoration(
+                border: Border(top: BorderSide(color: smartBorder)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  FilledButton.icon(
+                    onPressed: () => _confirmLogout(context),
+                    icon: const Icon(Icons.logout, size: 18),
+                    label: const Text(
+                      'Log keluar',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: smartOrange.withValues(alpha: 0.1),
+                      foregroundColor: smartOrange,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  'RISDA · Lot Getah Malaysia',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.labelSmall
-                      ?.copyWith(color: smartMuted),
-                ),
-              ],
+                  const SizedBox(height: 10),
+                  Text(
+                    'RISDA · Lot Getah Malaysia',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.labelSmall
+                        ?.copyWith(color: smartMuted),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -184,6 +189,9 @@ class _ProfileHeader extends StatelessWidget {
                         ),
                       ),
                     ),
+                    // Light/dark mode, same round button as the headers.
+                    const ThemeModeButton(),
+                    const SizedBox(width: 4),
                     IconButton(
                       tooltip: 'Tutup',
                       icon: const Icon(Icons.close, color: Colors.white70),

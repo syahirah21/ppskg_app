@@ -92,6 +92,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void _setNegeri(String? negeri) => AppState.negeri.value = negeri;
 
+  Widget _buildBody(BuildContext context, DashboardData data, bool desktop) =>
+      SliverPadding(
+        padding: desktop
+            ? const EdgeInsets.fromLTRB(32, 16, 32, 32)
+            : const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        sliver: SliverToBoxAdapter(
+          child: _buildBodyCards(
+            context: context,
+            data: data,
+            negeri: _negeri,
+            onPickNegeri: _setNegeri,
+            desktop: desktop,
+          ),
+        ),
+      );
+
   Future<void> _refresh() async {
     final future = _load();
     setState(() {
@@ -102,6 +118,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final desktop = isDesktop(context);
     return FutureBuilder<DashboardData>(
       future: _future,
       builder: (context, snap) {
@@ -113,7 +130,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
             physics: const AlwaysScrollableScrollPhysics(),
             slivers: [
               SliverToBoxAdapter(
-                child: _HeaderWithCards(data: data, negeri: _negeri),
+                child: _HeaderWithCards(
+                  data: data,
+                  negeri: _negeri,
+                  desktop: desktop,
+                ),
               ),
               if (loading)
                 const SliverFillRemaining(
@@ -129,34 +150,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                 )
               else
-                SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                  sliver: SliverList.list(
-                    children: [
-                      _OverviewCard(data: data!),
-                      const SizedBox(height: 16),
-                      _DistributionCard(data: data),
-                      const SizedBox(height: 16),
-                      _RankingCard(
-                        title: _negeri == null
-                            ? 'Negeri teratas'
-                            : 'Daerah teratas',
-                        subtitle: _negeri ?? 'Ketik negeri untuk butiran',
-                        stats: (_negeri == null ? data.byNegeri : data.byDaerah)
-                            .where((g) => g.label != 'Tiada data')
-                            .toList(),
-                        total: data.totalLots,
-                        onTap: _negeri == null ? _setNegeri : null,
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        'Sumber: RISDA GIS Server · Lot_Getah_Satu_Malaysia',
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
-                  ),
-                ),
+                _buildBody(context, data!, desktop),
             ],
           ),
         );
@@ -165,16 +159,85 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 }
 
+/// Builds the cards under the header; on desktop the overview and ranking
+/// sit beside the distribution chart.
+Widget _buildBodyCards({
+  required BuildContext context,
+  required DashboardData data,
+  required String? negeri,
+  required ValueChanged<String> onPickNegeri,
+  required bool desktop,
+}) {
+  final overview = _OverviewCard(data: data);
+  final distribution = _DistributionCard(data: data);
+  final ranking = _RankingCard(
+    title: negeri == null ? 'Negeri teratas' : 'Daerah teratas',
+    subtitle: negeri ?? 'Ketik negeri untuk butiran',
+    stats: (negeri == null ? data.byNegeri : data.byDaerah)
+        .where((g) => g.label != 'Tiada data')
+        .toList(),
+    total: data.totalLots,
+    onTap: negeri == null ? onPickNegeri : null,
+  );
+  final source = Text(
+    'Sumber: RISDA GIS Server · Lot_Getah_Satu_Malaysia',
+    textAlign: TextAlign.center,
+    style: Theme.of(context).textTheme.bodySmall,
+  );
+  if (!desktop) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        overview,
+        const SizedBox(height: 16),
+        distribution,
+        const SizedBox(height: 16),
+        ranking,
+        const SizedBox(height: 12),
+        source,
+      ],
+    );
+  }
+  return desktopContent(
+    Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              flex: 3,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [overview, const SizedBox(height: 20), ranking],
+              ),
+            ),
+            const SizedBox(width: 20),
+            Expanded(flex: 2, child: distribution),
+          ],
+        ),
+        const SizedBox(height: 16),
+        source,
+      ],
+    ),
+  );
+}
+
 /// Brown header with the headline figures, plus a row of status cards that
 /// overlaps its bottom edge and scrolls sideways.
 class _HeaderWithCards extends StatelessWidget {
+  final bool desktop;
   final DashboardData? data;
   final String? negeri;
 
   static const _cardsHeight = 132.0;
   static const _overlap = 64.0;
 
-  const _HeaderWithCards({required this.data, required this.negeri});
+  const _HeaderWithCards({
+    required this.data,
+    required this.negeri,
+    required this.desktop,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -187,73 +250,77 @@ class _HeaderWithCards extends StatelessWidget {
         Container(
           margin: const EdgeInsets.only(bottom: _cardsHeight - _overlap),
           decoration: const BoxDecoration(gradient: headerGradient),
-          padding: EdgeInsets.fromLTRB(
-            20,
-            MediaQuery.paddingOf(context).top + 12,
-            20,
-            _overlap + 20,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Image.asset('assets/images/risda_logo.png', height: 40),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+          padding: desktop
+              ? const EdgeInsets.fromLTRB(32, 28, 32, _overlap + 28)
+              : EdgeInsets.fromLTRB(
+                  20,
+                  MediaQuery.paddingOf(context).top + 12,
+                  20,
+                  _overlap + 20,
+                ),
+          child: desktop
+              ? desktopContent(_buildDesktopTop(theme, data))
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
                       children: [
-                        Text(
-                          'RISDA',
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w800,
-                            height: 1.1,
+                        Image.asset('assets/images/risda_logo.png', height: 40),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'RISDA',
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w800,
+                                  height: 1.1,
+                                ),
+                              ),
+                              Text(
+                                'Lot Getah Malaysia',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: Colors.white70,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        Text(
-                          'Lot Getah Malaysia',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: Colors.white70,
-                          ),
+                        // Opens the profile panel (HomeShell's end drawer).
+                        ProfileAvatarButton(
+                          onTap: () => Scaffold.of(context).openEndDrawer(),
                         ),
                       ],
                     ),
-                  ),
-                  // Opens the profile panel (HomeShell's end drawer).
-                  ProfileAvatarButton(
-                    onTap: () => Scaffold.of(context).openEndDrawer(),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 22),
-              // Location filter sits beside the totals it changes.
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      data == null ? '—' : fmtInt(data.totalLots),
-                      style: theme.textTheme.displaySmall?.copyWith(
-                        color: smartGold,
-                        fontWeight: FontWeight.w800,
+                    const SizedBox(height: 22),
+                    // Location filter sits beside the totals it changes.
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            data == null ? '—' : fmtInt(data.totalLots),
+                            style: theme.textTheme.displaySmall?.copyWith(
+                              color: smartGold,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        const LocationPill(),
+                      ],
+                    ),
+                    Text(
+                      data == null
+                          ? 'Memuatkan data…'
+                          : 'lot getah berdaftar · ${_fmtHa(data.totalArea)}',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: Colors.white70,
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  const LocationPill(),
-                ],
-              ),
-              Text(
-                data == null
-                    ? 'Memuatkan data…'
-                    : 'lot getah berdaftar · ${_fmtHa(data.totalArea)}',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: Colors.white70,
+                  ],
                 ),
-              ),
-            ],
-          ),
         ),
         Positioned(
           left: 0,
@@ -262,16 +329,29 @@ class _HeaderWithCards extends StatelessWidget {
           height: _cardsHeight,
           child: data == null
               ? const SizedBox()
+              : desktop
+              ? Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: desktopContent(
+                    Row(
+                      children: [
+                        for (final status in _statuses)
+                          Expanded(
+                            child: _StatusCard(
+                              stat: data.statOf(data.byStatusTorehan, status),
+                              total: data.totalLots,
+                              wide: true,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                )
               : ListView(
                   scrollDirection: Axis.horizontal,
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   children: [
-                    for (final status in [
-                      'Bertoreh',
-                      'Tidak Bertoreh',
-                      'Getah Muda',
-                      'Tiada data',
-                    ])
+                    for (final status in _statuses)
                       _StatusCard(
                         stat: data.statOf(data.byStatusTorehan, status),
                         total: data.totalLots,
@@ -282,6 +362,61 @@ class _HeaderWithCards extends StatelessWidget {
       ],
     );
   }
+
+  static const _statuses = [
+    'Bertoreh',
+    'Tidak Bertoreh',
+    'Getah Muda',
+    'Tiada data',
+  ];
+
+  /// Desktop header: page title, then the total beside the state filter.
+  /// The RISDA logo and profile live in the sidebar instead.
+  Widget _buildDesktopTop(ThemeData theme, DashboardData? data) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        'Dashboard',
+        style: theme.textTheme.headlineSmall?.copyWith(
+          color: Colors.white,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+      Text(
+        'Ringkasan lot getah berdaftar RISDA',
+        style: theme.textTheme.bodyMedium?.copyWith(color: Colors.white60),
+      ),
+      const SizedBox(height: 24),
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Text(
+            data == null ? '—' : fmtInt(data.totalLots),
+            style: theme.textTheme.displayMedium?.copyWith(
+              color: smartGold,
+              fontWeight: FontWeight.w800,
+              height: 1,
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text(
+                data == null
+                    ? 'Memuatkan data…'
+                    : 'lot getah berdaftar · ${_fmtHa(data.totalArea)}',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  color: Colors.white70,
+                ),
+              ),
+            ),
+          ),
+          const LocationPill(),
+        ],
+      ),
+    ],
+  );
 }
 
 /// One tapping-status figure in the overlapping card row.
@@ -289,15 +424,24 @@ class _StatusCard extends StatelessWidget {
   final GroupStat stat;
   final int total;
 
-  const _StatusCard({required this.stat, required this.total});
+  /// Fills its share of a desktop row instead of a fixed phone width.
+  final bool wide;
+
+  const _StatusCard({
+    required this.stat,
+    required this.total,
+    this.wide = false,
+  });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final color = statusTorehanColor(stat.label);
     return Container(
-      width: 168,
-      margin: const EdgeInsets.only(right: 12, bottom: 8),
+      width: wide ? null : 168,
+      margin: wide
+          ? const EdgeInsets.fromLTRB(8, 0, 8, 8)
+          : const EdgeInsets.only(right: 12, bottom: 8),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,

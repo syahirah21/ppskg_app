@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../services/arcgis_service.dart';
 import '../services/auth_service.dart';
 import '../theme.dart';
+import '../widgets/theme_toggle.dart';
 
 /// Lists lots that are missing a Status Torehan or a valid Tahun Tanam so
 /// officers can fill them in. The edit form only asks for what's missing.
@@ -161,100 +162,137 @@ class _SearchScreenState extends State<SearchScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Column(
-      children: [
-        Container(
-          decoration: const BoxDecoration(gradient: headerGradient),
-          padding: EdgeInsets.fromLTRB(
-            16,
-            MediaQuery.paddingOf(context).top + 12,
-            16,
-            14,
+    final desktop = isDesktop(context);
+    final mainSearch = SizedBox(
+      height: 46,
+      child: TextField(
+        controller: _controller,
+        textInputAction: TextInputAction.search,
+        textCapitalization: TextCapitalization.characters,
+        onSubmitted: (_) => _search(),
+        style: theme.textTheme.bodyMedium,
+        decoration: InputDecoration(
+          hintText: 'Nama, no. KP atau no. permohonan',
+          fillColor: theme.colorScheme.surface,
+          contentPadding: EdgeInsets.zero,
+          prefixIcon: const Icon(Icons.search, size: 20),
+          suffixIcon: IconButton(
+            icon: const Icon(Icons.arrow_forward, size: 20),
+            onPressed: _search,
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Cari & Kemaskini',
-                style: theme.textTheme.titleLarge?.copyWith(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              Text(
-                'Lot yang belum lengkap: status torehan atau tahun tanam',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: Colors.white70,
-                ),
-              ),
-              const SizedBox(height: 12),
-              SizedBox(
-                height: 46,
-                child: TextField(
-                  controller: _controller,
-                  textInputAction: TextInputAction.search,
-                  textCapitalization: TextCapitalization.characters,
-                  onSubmitted: (_) => _search(),
-                  style: theme.textTheme.bodyMedium,
-                  decoration: InputDecoration(
-                    hintText: 'Nama, no. KP atau no. permohonan',
-                    fillColor: theme.colorScheme.surface,
-                    contentPadding: EdgeInsets.zero,
-                    prefixIcon: const Icon(Icons.search, size: 20),
-                    suffixIcon: IconButton(
-                      icon: const Icon(Icons.arrow_forward, size: 20),
-                      onPressed: _search,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Row(
+        ),
+      ),
+    );
+    final mukimField = _SmallSearchField(
+      controller: _mukim,
+      hint: 'Mukim',
+      icon: Icons.place_outlined,
+      onSubmitted: _search,
+      height: desktop ? 46 : 40,
+    );
+    final lotField = _SmallSearchField(
+      controller: _lot,
+      hint: 'No. Lot',
+      icon: Icons.tag,
+      onSubmitted: _search,
+      height: desktop ? 46 : 40,
+    );
+    final header = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Phones get the light/dark button here; desktop has it in the
+        // sidebar.
+        Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    flex: 3,
-                    child: _SmallSearchField(
-                      controller: _mukim,
-                      hint: 'Mukim',
-                      icon: Icons.place_outlined,
-                      onSubmitted: _search,
-                    ),
+                  Text(
+                    'Cari & Kemaskini',
+                    style:
+                        (desktop
+                                ? theme.textTheme.headlineSmall
+                                : theme.textTheme.titleLarge)
+                            ?.copyWith(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                            ),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    flex: 2,
-                    child: _SmallSearchField(
-                      controller: _lot,
-                      hint: 'No. Lot',
-                      icon: Icons.tag,
-                      onSubmitted: _search,
+                  Text(
+                    'Lot yang belum lengkap: status torehan atau tahun tanam',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: Colors.white70,
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 10),
-              // Shrinks on narrow phones so all three chips stay visible.
-              FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerLeft,
-                child: Row(
-                  children: [
-                    for (final (i, f) in IncompleteFilter.values.indexed) ...[
-                      if (i > 0) const SizedBox(width: 8),
-                      _FilterChip(
-                        filter: f,
-                        count: _counts[f],
-                        selected: f == _filter,
-                        onTap: () => _setFilter(f),
-                      ),
-                    ],
-                  ],
+            ),
+            if (!desktop) ...[
+              const SizedBox(width: 8),
+              const ThemeModeButton(),
+            ],
+          ],
+        ),
+        SizedBox(height: desktop ? 20 : 12),
+        // Desktop puts all three search boxes on one line.
+        if (desktop)
+          Row(
+            children: [
+              Expanded(flex: 5, child: mainSearch),
+              const SizedBox(width: 10),
+              Expanded(flex: 3, child: mukimField),
+              const SizedBox(width: 10),
+              Expanded(flex: 2, child: lotField),
+            ],
+          )
+        else ...[
+          mainSearch,
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(flex: 3, child: mukimField),
+              const SizedBox(width: 8),
+              Expanded(flex: 2, child: lotField),
+            ],
+          ),
+        ],
+        SizedBox(height: desktop ? 14 : 10),
+        // Shrinks on narrow phones so all three chips stay visible.
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Row(
+            children: [
+              for (final (i, f) in IncompleteFilter.values.indexed) ...[
+                if (i > 0) const SizedBox(width: 8),
+                _FilterChip(
+                  filter: f,
+                  count: _counts[f],
+                  selected: f == _filter,
+                  onTap: () => _setFilter(f),
                 ),
-              ),
+              ],
             ],
           ),
         ),
-        Expanded(child: _buildResults(theme)),
+      ],
+    );
+    return Column(
+      children: [
+        Container(
+          decoration: const BoxDecoration(gradient: headerGradient),
+          padding: desktop
+              ? const EdgeInsets.fromLTRB(32, 28, 32, 22)
+              : EdgeInsets.fromLTRB(
+                  16,
+                  MediaQuery.paddingOf(context).top + 12,
+                  16,
+                  14,
+                ),
+          child: desktop ? desktopContent(header) : header,
+        ),
+        Expanded(child: _buildResults(theme, desktop)),
       ],
     );
   }
@@ -266,7 +304,7 @@ class _SearchScreenState extends State<SearchScreen> {
     IncompleteFilter.tiadaTahun => 'tiada tahun tanam',
   };
 
-  Widget _buildResults(ThemeData theme) {
+  Widget _buildResults(ThemeData theme, bool desktop) {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_error != null) {
       return _EmptyState(
@@ -307,6 +345,43 @@ class _SearchScreenState extends State<SearchScreen> {
                   ? 'Tiada lot yang belum lengkap untuk carian ini'
                   : 'Semua lot dalam senarai ini telah dikemaskini.\n'
                         'Cari semula untuk memuatkan lagi.',
+            ),
+          ),
+        ],
+      );
+    }
+    if (desktop) {
+      // One table-like card: column headings, then a row per lot.
+      return ListView(
+        padding: const EdgeInsets.fromLTRB(32, 20, 32, 32),
+        children: [
+          desktopContent(
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                summary,
+                Card(
+                  clipBehavior: Clip.antiAlias,
+                  margin: EdgeInsets.zero,
+                  child: Column(
+                    children: [
+                      const _LotTableHeader(),
+                      for (final lot in results) ...[
+                        Divider(
+                          height: 1,
+                          color: theme.colorScheme.outlineVariant,
+                        ),
+                        _LotRow(
+                          lot: lot,
+                          saved: _previewEdits[lot.globalId],
+                          onTap: () => _openLot(lot),
+                          wide: true,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -409,11 +484,87 @@ class _LotRow extends StatelessWidget {
   final _LotEdit? saved;
   final VoidCallback onTap;
 
-  const _LotRow({required this.lot, this.saved, required this.onTap});
+  /// Desktop table row: one column per field instead of stacked lines.
+  final bool wide;
+
+  const _LotRow({
+    required this.lot,
+    this.saved,
+    required this.onTap,
+    this.wide = false,
+  });
+
+  /// What still needs filling in, or the saved preview edit.
+  Widget _status(ThemeData theme) => saved != null
+      ? Text(
+          '✓ ${saved!.summary}',
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: smartGreen,
+            fontWeight: FontWeight.w700,
+          ),
+        )
+      : Text(
+          [
+            if (lot.needsStatus) 'Tiada status torehan',
+            if (lot.needsTahunTanam)
+              lot.tahunTanam == null || lot.tahunTanam == 0
+                  ? 'Tiada tahun tanam'
+                  : 'Tahun tanam tidak sah',
+          ].join(' · '),
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: smartOrange,
+            fontWeight: FontWeight.w600,
+          ),
+        );
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    if (wide) {
+      Widget cell(int flex, String text, {bool bold = false}) => Expanded(
+        flex: flex,
+        child: Padding(
+          padding: const EdgeInsets.only(right: 12),
+          child: Text(
+            text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: bold ? null : smartMuted,
+              fontWeight: bold ? FontWeight.w600 : null,
+            ),
+          ),
+        ),
+      );
+      return InkWell(
+        onTap: onTap,
+        hoverColor: smartGold.withValues(alpha: 0.08),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 14, 12, 14),
+          child: Row(
+            children: [
+              cell(_LotTableHeader.flexes[0], lot.nama, bold: true),
+              cell(_LotTableHeader.flexes[1], lot.noLot),
+              cell(_LotTableHeader.flexes[2], lot.mukim),
+              cell(_LotTableHeader.flexes[3], lot.daerah),
+              Expanded(flex: _LotTableHeader.flexes[4], child: _status(theme)),
+              Expanded(
+                flex: _LotTableHeader.flexes[5],
+                child: Text(
+                  '${lot.luas.toStringAsFixed(4)} ha',
+                  textAlign: TextAlign.right,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Icon(Icons.chevron_right, size: 18, color: smartMuted),
+            ],
+          ),
+        ),
+      );
+    }
     return InkWell(
       onTap: onTap,
       child: Padding(
@@ -443,27 +594,7 @@ class _LotRow extends StatelessWidget {
                   ),
                   Padding(
                     padding: const EdgeInsets.only(top: 3),
-                    child: saved != null
-                        ? Text(
-                            '✓ ${saved!.summary}',
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: smartGreen,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          )
-                        : Text(
-                            [
-                              if (lot.needsStatus) 'Tiada status torehan',
-                              if (lot.needsTahunTanam)
-                                lot.tahunTanam == null || lot.tahunTanam == 0
-                                    ? 'Tiada tahun tanam'
-                                    : 'Tahun tanam tidak sah',
-                            ].join(' · '),
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: smartOrange,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
+                    child: _status(theme),
                   ),
                 ],
               ),
@@ -479,6 +610,50 @@ class _LotRow extends StatelessWidget {
             const Icon(Icons.chevron_right, size: 18, color: smartMuted),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Column headings above the desktop results table.
+class _LotTableHeader extends StatelessWidget {
+  const _LotTableHeader();
+
+  /// Relative widths of Nama, Lot, Mukim, Daerah, Belum lengkap, Luas.
+  static const flexes = [5, 2, 3, 3, 4, 2];
+  static const _labels = [
+    'Nama',
+    'No. Lot',
+    'Mukim',
+    'Daerah',
+    'Belum lengkap',
+    'Luas',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.labelSmall?.copyWith(
+      color: smartMuted,
+      letterSpacing: 0.8,
+      fontWeight: FontWeight.w700,
+    );
+    return Container(
+      color: smartGold.withValues(alpha: 0.10),
+      padding: const EdgeInsets.fromLTRB(20, 12, 38, 12),
+      child: Row(
+        children: [
+          for (final (i, label) in _labels.indexed)
+            Expanded(
+              flex: flexes[i],
+              child: Text(
+                label.toUpperCase(),
+                textAlign: i == _labels.length - 1
+                    ? TextAlign.right
+                    : TextAlign.left,
+                style: style,
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -591,8 +766,14 @@ class _EditDialogState extends State<_EditDialog> {
     }
   }
 
+  // Cream background, so always use the light theme (see [lightTheme]).
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => Theme(
+    data: lightTheme,
+    child: Builder(builder: _build),
+  );
+
+  Widget _build(BuildContext context) {
     final theme = Theme.of(context);
     final lot = widget.lot;
     final missing = _missing;
@@ -858,19 +1039,21 @@ class _SmallSearchField extends StatelessWidget {
   final String hint;
   final IconData icon;
   final VoidCallback onSubmitted;
+  final double height;
 
   const _SmallSearchField({
     required this.controller,
     required this.hint,
     required this.icon,
     required this.onSubmitted,
+    this.height = 40,
   });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return SizedBox(
-      height: 40,
+      height: height,
       child: ValueListenableBuilder(
         valueListenable: controller,
         builder: (context, value, _) => TextField(
