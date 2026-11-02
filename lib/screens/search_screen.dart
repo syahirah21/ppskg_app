@@ -1,18 +1,27 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../services/arcgis_service.dart';
 import '../services/auth_service.dart';
+import '../services/draft_service.dart';
+import '../services/search_cache.dart';
 import '../theme.dart';
 import '../widgets/theme_toggle.dart';
 
 /// Lists lots that are missing a Status Torehan or a valid Tahun Tanam so
 /// officers can fill them in. The edit form only asks for what's missing.
 ///
-/// While [ArcGisService.editsEnabled] is false, saving only marks the lot in
-/// this screen (it stays listed, since the layer still has no status) and
-/// nothing is sent to the server. Once edits are live, a saved lot drops off
-/// the list because it now has data.
+/// Work is kept on the device by [DraftService]: officers can save a draft
+/// and finish it later, and anything sent without internet waits in a queue
+/// and goes out automatically. The last lists are kept too ([SearchCache]),
+/// so the screen still works offline.
+///
+/// While [ArcGisService.editsEnabled] is false, sending only marks the lot
+/// in this screen (it stays listed, since the layer still has no status) and
+/// nothing is written to the server. Once edits are live, a sent lot drops
+/// off the list because it now has data.
 class SearchScreen extends StatefulWidget {
   const SearchScreen({super.key});
 
@@ -42,18 +51,42 @@ class _SearchScreenState extends State<SearchScreen> {
   String? _error;
   bool _loading = false;
 
-  /// What was saved in preview mode for each lot, by GlobalID.
-  final Map<String, _LotEdit> _previewEdits = {};
+  /// Showing a list kept on this device (drafts or sent lots) instead of
+  /// the server list; null for the server list.
+  _LocalView? _local;
+
+  /// When the list on screen was saved, if it came from [SearchCache]
+  /// because there was no internet.
+  DateTime? _cachedAt;
+
+  /// The lot being sent from the edit form, which shows its own message.
+  String? _submitting;
+
+  late final StreamSubscription<LotDraft> _sentSub;
 
   @override
   void initState() {
     super.initState();
+    _sentSub = DraftService.sent.listen(_onSent);
     // Show the to-do list straight away, before any name is typed.
     WidgetsBinding.instance.addPostFrameCallback((_) => _search());
   }
 
+  /// A queued edit reached the server.
+  void _onSent(LotDraft d) {
+    if (!mounted) return;
+    if (ArcGisService.editsEnabled &&
+        (_results?.any((r) => r.globalId == d.lot.globalId) ?? false)) {
+      _markDone(d.lot);
+    }
+    if (d.lot.globalId != _submitting) {
+      _toast('Draf telah dihantar: ${d.lot.nama}');
+    }
+  }
+
   @override
   void dispose() {
+    _sentSub.cancel();
     _controller.dispose();
     _mukim.dispose();
     _lot.dispose();
@@ -74,9 +107,13 @@ class _SearchScreenState extends State<SearchScreen> {
     setState(() {
       _loading = true;
       _error = null;
+      _local = null;
     });
+    final cacheKey = '${_filter.name}|$name|$mukim|$lot';
     try {
-      final (results, counts) = await (
+      // Future.wait (not .wait) passes the first error through unwrapped,
+      // so a lost connection can be told apart from other errors.
+      final all = await Future.wait<Object>([
         _service.searchIncomplete(
           name,
           filter: _filter,
@@ -84,21 +121,42 @@ class _SearchScreenState extends State<SearchScreen> {
           lot: lot,
           limit: _limit,
         ),
-        [
-          for (final f in IncompleteFilter.values)
-            _service.countIncomplete(name, filter: f, mukim: mukim, lot: lot),
-        ].wait,
-      ).wait;
+        for (final f in IncompleteFilter.values)
+          _service.countIncomplete(name, filter: f, mukim: mukim, lot: lot),
+      ]);
+      final results = all.first as List<LotRecord>;
+      final counts = all.skip(1).cast<int>().toList();
       setState(() {
         _results = results;
         _counts = {
           for (final (i, f) in IncompleteFilter.values.indexed) f: counts[i],
         };
+        _cachedAt = null;
       });
+      DraftService.reportRequest();
+      unawaited(SearchCache.put(cacheKey, results, _counts));
     } catch (e) {
-      setState(() => _error = '$e');
+      DraftService.reportRequest(error: e);
+      // No internet: fall back to the list saved the last time it loaded.
+      final cached = DraftService.isNetworkError(e)
+          ? await SearchCache.get(cacheKey)
+          : null;
+      if (!mounted) return;
+      setState(() {
+        if (cached case (final results, final counts, final savedAt)) {
+          _results = results;
+          _counts = counts;
+          _cachedAt = savedAt;
+        } else {
+          _error = DraftService.isNetworkError(e)
+              ? 'Tiada sambungan internet.\n'
+                    'Senarai ini belum pernah dibuka di peranti ini. '
+                    'Draf anda masih boleh dibuka di tab Draf.'
+              : DraftService.describeError(e);
+        }
+      });
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -122,34 +180,50 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 
   void _setFilter(IncompleteFilter filter) {
-    if (filter == _filter || _loading) return;
+    if ((filter == _filter && _local == null) || _loading) return;
     setState(() => _filter = filter);
     _search();
   }
 
-  Future<void> _openLot(LotRecord lot) async {
-    final edit = await showDialog<_LotEdit>(
+  Future<void> _openLot(LotRecord listed) async {
+    final sent = DraftService.history.value[listed.globalId];
+    // Once sent the layer has values, so correct against the lot as it was
+    // before; the form then asks the same questions as the first time.
+    final lot = sent?.lot ?? listed;
+    final result = await showDialog<_EditResult>(
       context: context,
-      builder: (_) => _EditDialog(lot: lot, saved: _previewEdits[lot.globalId]),
+      builder: (_) => _EditDialog(
+        lot: lot,
+        draft: DraftService.drafts.value[lot.globalId],
+        sent: sent,
+      ),
     );
-    if (edit == null || !mounted) return;
-    if (ArcGisService.editsEnabled) {
-      try {
-        await _service.updateLot(
-          lot.globalId,
-          status: edit.status,
-          tahunTanam: edit.tahunTanam,
-          namaPengawai: edit.pengawai,
-        );
-        _markDone(lot);
-        _toast('Data berjaya disimpan');
-      } catch (e) {
-        _toast('Gagal menyimpan: $e');
-      }
-    } else {
-      // Preview only: the layer is unchanged, so the lot stays listed.
-      setState(() => _previewEdits[lot.globalId] = edit);
-      _toast('Data berjaya disimpan');
+    if (result == null || !mounted) return;
+    switch (result) {
+      case (action: _EditAction.saveDraft, :final edit?):
+        await DraftService.saveDraft(lot, edit);
+        _toast('Disimpan sebagai draf di peranti ini');
+      case (action: _EditAction.deleteDraft, edit: _):
+        await DraftService.deleteDraft(lot.globalId);
+        _toast('Draf dipadam');
+      case (action: _EditAction.submit, :final edit?):
+        _submitting = lot.globalId;
+        final outcome = await DraftService.submit(lot, edit);
+        _submitting = null;
+        if (!mounted) return;
+        _toast(switch (outcome) {
+          SubmitResult.sent =>
+            sent == null ? 'Data berjaya disimpan' : 'Pembetulan disimpan',
+          SubmitResult.queued =>
+            'Tiada internet. Disimpan di peranti dan akan dihantar '
+                'automatik apabila ada sambungan.',
+          SubmitResult.failed =>
+            'Gagal dihantar: '
+                '${DraftService.drafts.value[lot.globalId]?.error}. '
+                'Disimpan sebagai draf.',
+        });
+      case (action: _, edit: null):
+        break;
     }
   }
 
@@ -160,7 +234,18 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ListenableBuilder(
+    // Redraw whenever drafts change or are sent, including in the background.
+    listenable: Listenable.merge([
+      DraftService.drafts,
+      DraftService.history,
+      DraftService.online,
+      DraftService.syncing,
+    ]),
+    builder: (context, _) => _build(context),
+  );
+
+  Widget _build(BuildContext context) {
     final theme = Theme.of(context);
     final desktop = isDesktop(context);
     final mainSearch = SizedBox(
@@ -197,6 +282,33 @@ class _SearchScreenState extends State<SearchScreen> {
       onSubmitted: _search,
       height: desktop ? 46 : 40,
     );
+    final serverChips = [
+      for (final f in IncompleteFilter.values)
+        _FilterChip(
+          label: f.label,
+          count: _counts[f],
+          selected: _local == null && f == _filter,
+          onTap: () => _setFilter(f),
+        ),
+    ];
+    // Lists kept on this device, so they work without internet: unsent
+    // drafts, and everything sent (to check or correct).
+    final localChips = [
+      _FilterChip(
+        label: 'Draf',
+        icon: Icons.edit_note,
+        count: DraftService.drafts.value.length,
+        selected: _local == _LocalView.drafts,
+        onTap: () => setState(() => _local = _LocalView.drafts),
+      ),
+      _FilterChip(
+        label: 'Dikemaskini',
+        icon: Icons.history,
+        count: DraftService.history.value.length,
+        selected: _local == _LocalView.history,
+        onTap: () => setState(() => _local = _LocalView.history),
+      ),
+    ];
     final header = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -258,21 +370,26 @@ class _SearchScreenState extends State<SearchScreen> {
           ),
         ],
         SizedBox(height: desktop ? 14 : 10),
-        // Shrinks on narrow phones so all three chips stay visible.
-        FittedBox(
-          fit: BoxFit.scaleDown,
-          alignment: Alignment.centerLeft,
+        // One row; on phones it scrolls sideways when the chips don't fit.
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          physics: const BouncingScrollPhysics(),
+          // Chips run on to the screen edge, hinting there are more.
+          clipBehavior: Clip.none,
           child: Row(
             children: [
-              for (final (i, f) in IncompleteFilter.values.indexed) ...[
-                if (i > 0) const SizedBox(width: 8),
-                _FilterChip(
-                  filter: f,
-                  count: _counts[f],
-                  selected: f == _filter,
-                  onTap: () => _setFilter(f),
+              for (final (i, chip) in [...serverChips, ...localChips].indexed)
+                Padding(
+                  // A wider gap before the lists kept on the device.
+                  padding: EdgeInsets.only(
+                    left: i == 0
+                        ? 0
+                        : i == serverChips.length
+                        ? (desktop ? 24 : 16)
+                        : 8,
+                  ),
+                  child: chip,
                 ),
-              ],
             ],
           ),
         ),
@@ -292,7 +409,21 @@ class _SearchScreenState extends State<SearchScreen> {
                 ),
           child: desktop ? desktopContent(header) : header,
         ),
-        Expanded(child: _buildResults(theme, desktop)),
+        _SyncBanner(
+          cachedAt: _cachedAt,
+          desktop: desktop,
+          onRetry: () {
+            DraftService.sync();
+            if (_cachedAt != null || _error != null) _search();
+          },
+        ),
+        Expanded(
+          child: switch (_local) {
+            _LocalView.drafts => _buildDrafts(theme, desktop),
+            _LocalView.history => _buildHistory(theme, desktop),
+            null => _buildResults(theme, desktop),
+          },
+        ),
       ],
     );
   }
@@ -371,12 +502,7 @@ class _SearchScreenState extends State<SearchScreen> {
                           height: 1,
                           color: theme.colorScheme.outlineVariant,
                         ),
-                        _LotRow(
-                          lot: lot,
-                          saved: _previewEdits[lot.globalId],
-                          onTap: () => _openLot(lot),
-                          wide: true,
-                        ),
+                        _row(lot, wide: true),
                       ],
                     ],
                   ),
@@ -399,13 +525,232 @@ class _SearchScreenState extends State<SearchScreen> {
               borderRadius: BorderRadius.circular(10),
               side: BorderSide(color: theme.colorScheme.outlineVariant),
             ),
-            child: _LotRow(
-              lot: lot,
-              saved: _previewEdits[lot.globalId],
-              onTap: () => _openLot(lot),
-            ),
+            child: _row(lot),
           ),
       ],
+    );
+  }
+
+  Widget _row(LotRecord lot, {bool wide = false}) => _LotRow(
+    lot: lot,
+    draft: DraftService.drafts.value[lot.globalId],
+    sent: DraftService.history.value[lot.globalId],
+    onTap: () => _openLot(lot),
+    wide: wide,
+  );
+
+  /// The drafts and queued edits kept on this device, newest first. Uses
+  /// the copy of each lot saved with it, so it works offline.
+  Widget _buildDrafts(ThemeData theme, bool desktop) {
+    final drafts = DraftService.drafts.value.values.toList()
+      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    final queued = DraftService.queuedCount;
+    if (drafts.isEmpty) {
+      return const _EmptyState(
+        icon: Icons.edit_note,
+        text:
+            'Tiada draf.\nTekan "Simpan draf" pada mana-mana lot untuk '
+            'menyimpan kerja dan sambung kemudian, walaupun tanpa internet.',
+      );
+    }
+    return _buildLocalList(
+      theme,
+      desktop,
+      [for (final d in drafts) d.lot],
+      [
+        '${drafts.length} draf di peranti ini',
+        if (queued > 0) '$queued menunggu untuk dihantar',
+      ].join(' · '),
+    );
+  }
+
+  /// Lots sent from this device, newest first, so a wrong entry can be
+  /// found and corrected even after the lot left the incomplete list.
+  Widget _buildHistory(ThemeData theme, bool desktop) {
+    final sent = DraftService.history.value.values.toList()
+      ..sort((a, b) => b.latest.sentAt.compareTo(a.latest.sentAt));
+    if (sent.isEmpty) {
+      return const _EmptyState(
+        icon: Icons.history,
+        text:
+            'Belum ada lot dikemaskini dari peranti ini.\n'
+            'Lot yang dihantar akan disenaraikan di sini dan boleh '
+            'dibetulkan jika tersalah isi.',
+      );
+    }
+    final corrected = sent.where((r) => r.corrected).length;
+    return _buildLocalList(
+      theme,
+      desktop,
+      [for (final r in sent) r.lot],
+      [
+        '${sent.length} lot dikemaskini dari peranti ini',
+        if (corrected > 0) '$corrected dibetulkan',
+        'Tekan lot untuk membetulkan',
+      ].join(' · '),
+    );
+  }
+
+  /// A list of lots kept on this device, in the same style as the results.
+  Widget _buildLocalList(
+    ThemeData theme,
+    bool desktop,
+    List<LotRecord> lots,
+    String summaryText,
+  ) {
+    final summary = Padding(
+      padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+      child: Text(
+        summaryText,
+        style: theme.textTheme.bodySmall?.copyWith(color: smartMuted),
+      ),
+    );
+    if (desktop) {
+      return ListView(
+        padding: const EdgeInsets.fromLTRB(32, 20, 32, 32),
+        children: [
+          desktopContent(
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                summary,
+                Card(
+                  clipBehavior: Clip.antiAlias,
+                  margin: EdgeInsets.zero,
+                  child: Column(
+                    children: [
+                      const _LotTableHeader(),
+                      for (final lot in lots) ...[
+                        Divider(
+                          height: 1,
+                          color: theme.colorScheme.outlineVariant,
+                        ),
+                        _row(lot, wide: true),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+      children: [
+        summary,
+        for (final lot in lots)
+          Card(
+            margin: const EdgeInsets.only(bottom: 6),
+            clipBehavior: Clip.antiAlias,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+              side: BorderSide(color: theme.colorScheme.outlineVariant),
+            ),
+            child: _row(lot),
+          ),
+      ],
+    );
+  }
+}
+
+enum _LocalView { drafts, history }
+
+/// "27/10 14:05", for when a draft or list was saved.
+String _fmtTime(DateTime t) {
+  String two(int n) => n.toString().padLeft(2, '0');
+  return '${two(t.day)}/${two(t.month)} ${two(t.hour)}:${two(t.minute)}';
+}
+
+/// Strip under the header about the connection: offline (work is kept and
+/// sent later), edits waiting to be sent, or an old saved list on screen.
+/// Hidden when everything is up to date.
+class _SyncBanner extends StatelessWidget {
+  final DateTime? cachedAt;
+  final bool desktop;
+  final VoidCallback onRetry;
+
+  const _SyncBanner({
+    required this.cachedAt,
+    required this.desktop,
+    required this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final online = DraftService.online.value;
+    final queued = DraftService.queuedCount;
+    final cached = cachedAt;
+    if (online && queued == 0 && cached == null) return const SizedBox();
+
+    final (IconData icon, Color color, String text, String action) = !online
+        ? (
+            Icons.cloud_off,
+            smartOrange,
+            [
+              'Tiada internet. Kerja anda disimpan di peranti dan dihantar '
+                  'automatik apabila ada sambungan.',
+              if (cached != null) 'Senarai disimpan ${_fmtTime(cached)}.',
+            ].join(' '),
+            'Cuba lagi',
+          )
+        : queued > 0
+        ? (
+            Icons.cloud_upload_outlined,
+            smartBlue,
+            '$queued kemaskini menunggu untuk dihantar.',
+            'Hantar sekarang',
+          )
+        : (
+            Icons.history,
+            smartGoldDeep,
+            'Memaparkan senarai yang disimpan ${_fmtTime(cached!)}.',
+            'Muat semula',
+          );
+    final content = Row(
+      children: [
+        Icon(icon, size: 18, color: color),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            text,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurface,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        if (DraftService.syncing.value)
+          const Padding(
+            padding: EdgeInsets.all(8),
+            child: SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          )
+        else
+          TextButton(
+            onPressed: onRetry,
+            style: TextButton.styleFrom(
+              foregroundColor: color,
+              visualDensity: VisualDensity.compact,
+            ),
+            child: Text(action),
+          ),
+      ],
+    );
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        border: Border(bottom: BorderSide(color: color.withValues(alpha: 0.4))),
+      ),
+      padding: EdgeInsets.symmetric(horizontal: desktop ? 32 : 14, vertical: 4),
+      child: desktop ? desktopContent(content) : content,
     );
   }
 }
@@ -413,13 +758,15 @@ class _SearchScreenState extends State<SearchScreen> {
 /// Filter pill on the dark header: gold when selected, with the number of
 /// matching lots (blank while loading).
 class _FilterChip extends StatelessWidget {
-  final IncompleteFilter filter;
+  final String label;
+  final IconData? icon;
   final int? count;
   final bool selected;
   final VoidCallback onTap;
 
   const _FilterChip({
-    required this.filter,
+    required this.label,
+    this.icon,
     required this.count,
     required this.selected,
     required this.onTap,
@@ -442,8 +789,12 @@ class _FilterChip extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (icon != null) ...[
+                Icon(icon, size: 16, color: fg),
+                const SizedBox(width: 4),
+              ],
               Text(
-                filter.label,
+                label,
                 style: theme.textTheme.labelMedium?.copyWith(
                   color: fg,
                   fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
@@ -477,11 +828,12 @@ class _FilterChip extends StatelessWidget {
 }
 
 /// One compact search result: name, location and what's missing on the
-/// left, planted area on the right. [saved] marks a lot already saved in
-/// preview mode.
+/// left, planted area on the right. [draft] marks work kept on the device;
+/// [sent] a lot already sent from it.
 class _LotRow extends StatelessWidget {
   final LotRecord lot;
-  final _LotEdit? saved;
+  final LotDraft? draft;
+  final SentRecord? sent;
   final VoidCallback onTap;
 
   /// Desktop table row: one column per field instead of stacked lines.
@@ -489,33 +841,81 @@ class _LotRow extends StatelessWidget {
 
   const _LotRow({
     required this.lot,
-    this.saved,
+    this.draft,
+    this.sent,
     required this.onTap,
     this.wide = false,
   });
 
-  /// What still needs filling in, or the saved preview edit.
-  Widget _status(ThemeData theme) => saved != null
-      ? Text(
-          '✓ ${saved!.summary}',
-          style: theme.textTheme.labelSmall?.copyWith(
-            color: smartGreen,
-            fontWeight: FontWeight.w700,
+  Widget _label(ThemeData theme, IconData icon, Color color, String text) =>
+      Row(
+        children: [
+          Icon(icon, size: 13, color: color),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: color,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           ),
-        )
-      : Text(
-          [
-            if (lot.needsStatus) 'Tiada status torehan',
-            if (lot.needsTahunTanam)
-              lot.tahunTanam == null || lot.tahunTanam == 0
-                  ? 'Tiada tahun tanam'
-                  : 'Tahun tanam tidak sah',
-          ].join(' · '),
-          style: theme.textTheme.labelSmall?.copyWith(
-            color: smartOrange,
-            fontWeight: FontWeight.w600,
-          ),
-        );
+        ],
+      );
+
+  /// The draft or queued edit, else what was sent (and when), else what
+  /// still needs filling in.
+  Widget _status(ThemeData theme) {
+    if (draft case final d?) {
+      final what = d.edit.summary;
+      return switch (d.state) {
+        DraftState.menunggu => _label(
+          theme,
+          Icons.schedule,
+          smartBlue,
+          'Menunggu internet · $what',
+        ),
+        DraftState.draf when d.error != null => _label(
+          theme,
+          Icons.error_outline,
+          smartOrange,
+          'Gagal dihantar · semak draf',
+        ),
+        DraftState.draf => _label(
+          theme,
+          Icons.edit_note,
+          smartGoldDeep,
+          what.isEmpty ? 'Draf' : 'Draf · $what',
+        ),
+      };
+    }
+    if (sent case final r?) {
+      final when = _fmtTime(r.latest.sentAt);
+      return _label(
+        theme,
+        Icons.check_circle,
+        smartGreen,
+        '${r.latest.edit.summary} · '
+        '${r.corrected ? 'dibetulkan $when' : when}',
+      );
+    }
+    return Text(
+      [
+        if (lot.needsStatus) 'Tiada status torehan',
+        if (lot.needsTahunTanam)
+          lot.tahunTanam == null || lot.tahunTanam == 0
+              ? 'Tiada tahun tanam'
+              : 'Tahun tanam tidak sah',
+      ].join(' · '),
+      style: theme.textTheme.labelSmall?.copyWith(
+        color: smartOrange,
+        fontWeight: FontWeight.w600,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -659,31 +1059,25 @@ class _LotTableHeader extends StatelessWidget {
   }
 }
 
-/// What an officer entered for one lot: a status and/or a planting year
-/// (only the ones that were missing), plus their name.
-class _LotEdit {
-  final String? status;
-  final int? tahunTanam;
-  final String pengawai;
+enum _EditAction { saveDraft, deleteDraft, submit }
 
-  const _LotEdit({this.status, this.tahunTanam, required this.pengawai});
-
-  /// E.g. "Bertoreh · Tahun 2015".
-  String get summary =>
-      [?status, if (tahunTanam != null) 'Tahun $tahunTanam'].join(' · ');
-}
+/// What the edit form was closed with.
+typedef _EditResult = ({_EditAction action, LotEdit? edit});
 
 /// Centered pop-up with a lot's details. It asks only for what the lot is
 /// missing (Status Torehan and/or Tahun Tanam) plus the officer's name, and
-/// pops with a [_LotEdit] once the user confirms.
+/// pops with an [_EditResult]: keep it as a draft, delete the draft, or send
+/// it once the user confirms.
 ///
-/// When the lot was already saved ([saved]), the form opens with those
-/// values filled in so a wrong entry can be corrected.
+/// The form opens with the [draft] kept on the device filled in, else the
+/// values already [sent], so work can be continued or corrected. When
+/// correcting it shows what was sent before and what is changing.
 class _EditDialog extends StatefulWidget {
   final LotRecord lot;
-  final _LotEdit? saved;
+  final LotDraft? draft;
+  final SentRecord? sent;
 
-  const _EditDialog({required this.lot, this.saved});
+  const _EditDialog({required this.lot, this.draft, this.sent});
 
   @override
   State<_EditDialog> createState() => _EditDialogState();
@@ -692,15 +1086,20 @@ class _EditDialog extends StatefulWidget {
 class _EditDialogState extends State<_EditDialog> {
   static const _dialogBg = Color(0xFFFFFDF9);
 
-  late String? _selected = widget.saved?.status;
-  late final _tahun = TextEditingController(
-    text: _previousYear?.toString() ?? '',
-  );
+  /// The values sent last time, when this is a correction.
+  LotEdit? get _saved => widget.sent?.latest.edit;
+
+  late final String? _initialStatus =
+      widget.draft?.edit.status ?? _saved?.status;
+  late final String _initialYear =
+      (widget.draft?.edit.tahunTanam ?? _previousYear)?.toString() ?? '';
+  late String? _selected = _initialStatus;
+  late final _tahun = TextEditingController(text: _initialYear);
 
   /// The year being corrected: the one saved earlier, else the layer's
   /// (invalid) value. Null when the lot has no year at all.
   int? get _previousYear {
-    final y = widget.saved?.tahunTanam ?? widget.lot.tahunTanam;
+    final y = _saved?.tahunTanam ?? widget.lot.tahunTanam;
     return y == null || y == 0 ? null : y;
   }
 
@@ -723,24 +1122,54 @@ class _EditDialogState extends State<_EditDialog> {
           '(${LotRecord.minTahunTanam}–${LotRecord.maxTahunTanam})';
     }
     if (_name.isEmpty) return 'Sila log masuk semula untuk menyimpan';
+    if (_changes.isEmpty) return 'Tukar nilai di atas untuk membetulkan';
     return null;
   }
 
-  /// "2015 → 2016" when correcting a saved value, otherwise just the value.
-  String _change(Object? before, Object? after) =>
-      before == null || before == after ? '$after' : '$before → $after';
+  /// Each value being changed as (label, before, after), so the form and
+  /// the confirmation can show it. Empty when correcting and nothing
+  /// differs from what was sent.
+  List<(String, String, String)> get _changes {
+    final lot = widget.lot;
+    final saved = _saved;
+    return [
+      if (lot.needsStatus && _selected != null && _selected != saved?.status)
+        ('Status torehan', saved?.status ?? 'Tiada', _selected!),
+      if (lot.needsTahunTanam &&
+          _year != null &&
+          (saved == null || _year != saved.tahunTanam))
+        ('Tahun tanam', _previousYear?.toString() ?? 'Tiada', '$_year'),
+    ];
+  }
+
+  /// What's been entered so far, complete or not.
+  LotEdit get _edit => LotEdit(
+    status: widget.lot.needsStatus ? _selected : null,
+    tahunTanam: widget.lot.needsTahunTanam ? _year : null,
+    pengawai: _name,
+  );
+
+  /// A draft needs at least one value and a signed-in officer.
+  bool get _canSaveDraft =>
+      _name.isNotEmpty && (_selected != null || _tahun.text.trim().isNotEmpty);
 
   Future<void> _confirm() async {
     final lot = widget.lot;
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Sahkan perubahan'),
-        content: Text(
-          '${lot.nama} (Lot ${lot.noLot})\n\n'
-          '${lot.needsStatus ? 'Status torehan: ${_change(widget.saved?.status, _selected)}\n' : ''}'
-          '${lot.needsTahunTanam ? 'Tahun tanam: ${_change(_previousYear, _year)}\n' : ''}'
-          'Pegawai: $_name',
+        title: Text(_saved == null ? 'Sahkan perubahan' : 'Sahkan pembetulan'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${lot.nama} (Lot ${lot.noLot})'),
+            const SizedBox(height: 12),
+            for (final (label, before, after) in _changes)
+              _ChangeLine(label: label, before: before, after: after),
+            const SizedBox(height: 8),
+            Text('Pegawai: $_name'),
+          ],
         ),
         actions: [
           TextButton(
@@ -749,20 +1178,13 @@ class _EditDialogState extends State<_EditDialog> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Simpan'),
+            child: const Text('Hantar'),
           ),
         ],
       ),
     );
     if (ok == true && mounted) {
-      Navigator.pop(
-        context,
-        _LotEdit(
-          status: lot.needsStatus ? _selected : null,
-          tahunTanam: lot.needsTahunTanam ? _year : null,
-          pengawai: _name,
-        ),
-      );
+      Navigator.pop(context, (action: _EditAction.submit, edit: _edit));
     }
   }
 
@@ -778,9 +1200,7 @@ class _EditDialogState extends State<_EditDialog> {
     final lot = widget.lot;
     final missing = _missing;
     // Only nag once the officer has started filling in the form.
-    final started =
-        _selected != widget.saved?.status ||
-        _tahun.text != (_previousYear?.toString() ?? '');
+    final started = _selected != _initialStatus || _tahun.text != _initialYear;
     final labelStyle = theme.textTheme.labelMedium?.copyWith(
       fontWeight: FontWeight.w600,
     );
@@ -807,7 +1227,7 @@ class _EditDialogState extends State<_EditDialog> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          widget.saved == null
+                          widget.sent == null
                               ? 'KEMASKINI MAKLUMAT'
                               : 'BETULKAN MAKLUMAT',
                           style: theme.textTheme.labelSmall?.copyWith(
@@ -834,41 +1254,18 @@ class _EditDialogState extends State<_EditDialog> {
                   ),
                 ],
               ),
-              if (widget.saved case final saved?) ...[
+              if (widget.draft case final draft?) ...[
                 const SizedBox(height: 12),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: smartGreen.withValues(alpha: 0.08),
-                    border: Border.all(
-                      color: smartGreen.withValues(alpha: 0.35),
-                    ),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Icon(
-                        Icons.check_circle,
-                        size: 18,
-                        color: smartGreen,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Telah disimpan: ${saved.summary} '
-                          '(oleh ${saved.pengawai}). '
-                          'Betulkan di bawah jika salah.',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: smartGreen,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                _DraftNotice(
+                  draft: draft,
+                  onDelete: () => Navigator.pop(context, (
+                    action: _EditAction.deleteDraft,
+                    edit: null,
+                  )),
                 ),
+              ] else if (widget.sent case final sent?) ...[
+                const SizedBox(height: 12),
+                _SentHistory(record: sent),
               ],
               const SizedBox(height: 12),
               Container(
@@ -925,21 +1322,15 @@ class _EditDialogState extends State<_EditDialog> {
                   ],
                 ),
                 const SizedBox(height: 8),
-                Row(
-                  children: [
-                    for (final (i, s)
-                        in ArcGisService.statusTorehanOptions.indexed) ...[
-                      if (i > 0) const SizedBox(width: 8),
-                      Expanded(
-                        child: _StatusOption(
-                          status: s,
-                          selected: _selected == s,
-                          onTap: () => setState(() => _selected = s),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
+                for (final (i, s)
+                    in ArcGisService.statusTorehanOptions.indexed) ...[
+                  if (i > 0) const SizedBox(height: 8),
+                  _StatusOption(
+                    status: s,
+                    selected: _selected == s,
+                    onTap: () => setState(() => _selected = s),
+                  ),
+                ],
               ],
               const SizedBox(height: 16),
               Text('Nama pegawai', style: labelStyle),
@@ -971,10 +1362,39 @@ class _EditDialogState extends State<_EditDialog> {
                   ],
                 ),
               ),
+              if (_saved != null && _changes.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                  decoration: BoxDecoration(
+                    color: smartBlue.withValues(alpha: 0.06),
+                    border: Border.all(color: smartBlue.withValues(alpha: 0.3)),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'PERUBAHAN',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: smartBlue,
+                          letterSpacing: 0.8,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      for (final (label, before, after) in _changes)
+                        _ChangeLine(label: label, before: before, after: after),
+                    ],
+                  ),
+                ),
+              ],
               // Space is always reserved so the buttons don't jump when the
-              // hint appears or disappears.
+              // hint appears or disappears. Corrections show it straight
+              // away so a greyed-out Hantar is explained.
               Visibility(
-                visible: started && missing != null,
+                visible: (started || _saved != null) && missing != null,
                 maintainSize: true,
                 maintainAnimation: true,
                 maintainState: true,
@@ -991,35 +1411,52 @@ class _EditDialogState extends State<_EditDialog> {
               const SizedBox(height: 14),
               Row(
                 children: [
+                  // Keeps the work on this device to finish later, even
+                  // when it's incomplete or there's no internet.
                   Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(context),
+                    child: OutlinedButton.icon(
+                      onPressed: _canSaveDraft
+                          ? () => Navigator.pop(context, (
+                              action: _EditAction.saveDraft,
+                              edit: _edit,
+                            ))
+                          : null,
+                      icon: const Icon(Icons.edit_note, size: 18),
+                      label: const Text('Simpan draf'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: smartInk,
                         side: BorderSide(
                           color: theme.colorScheme.outlineVariant,
                         ),
-                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 12,
+                        ),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10),
                         ),
                       ),
-                      child: const Text('Batal'),
                     ),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
-                    flex: 2,
                     child: FilledButton.icon(
                       onPressed: missing == null ? _confirm : null,
-                      icon: const Icon(Icons.save_outlined, size: 18),
-                      label: Text(
-                        ArcGisService.editsEnabled
-                            ? 'Simpan'
-                            : 'Simpan (pratonton)',
+                      icon: const Icon(Icons.send_outlined, size: 18),
+                      // Shrinks rather than wrapping on narrow phones.
+                      label: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          ArcGisService.editsEnabled
+                              ? 'Hantar'
+                              : 'Hantar (pratonton)',
+                        ),
                       ),
                       style: FilledButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 12,
+                        ),
                       ),
                     ),
                   ),
@@ -1028,6 +1465,222 @@ class _EditDialogState extends State<_EditDialog> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// "Status torehan: ~~Bertoreh~~ → Tidak Bertoreh": the old value struck
+/// through and the new one in bold.
+class _ChangeLine extends StatelessWidget {
+  final String label;
+  final String before;
+  final String after;
+
+  const _ChangeLine({
+    required this.label,
+    required this.before,
+    required this.after,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.bodySmall;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Text.rich(
+        TextSpan(
+          style: style,
+          children: [
+            TextSpan(
+              text: '$label: ',
+              style: const TextStyle(color: smartMuted),
+            ),
+            TextSpan(
+              text: before,
+              style: const TextStyle(
+                color: smartMuted,
+                decoration: TextDecoration.lineThrough,
+              ),
+            ),
+            const TextSpan(text: '  →  '),
+            TextSpan(
+              text: after,
+              style: const TextStyle(
+                color: smartGreen,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Green box at the top of the form for a lot already sent from this
+/// device: the original value, then each version sent, newest last.
+class _SentHistory extends StatelessWidget {
+  final SentRecord record;
+
+  const _SentHistory({required this.record});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final lot = record.lot;
+    final small = theme.textTheme.bodySmall;
+    final original = [
+      if (lot.needsStatus) lot.statusTorehan ?? 'Tiada status',
+      if (lot.needsTahunTanam)
+        lot.tahunTanam == null || lot.tahunTanam == 0
+            ? 'Tiada tahun'
+            : 'Tahun ${lot.tahunTanam} (tidak sah)',
+    ].join(' · ');
+    Widget line(String when, String what, {String? who, bool last = false}) =>
+        Padding(
+          padding: const EdgeInsets.only(top: 3),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 78,
+                child: Text(when, style: small?.copyWith(color: smartMuted)),
+              ),
+              Expanded(
+                child: Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(
+                        text: what,
+                        style: TextStyle(
+                          color: last ? smartGreen : smartInk,
+                          fontWeight: last ? FontWeight.w800 : FontWeight.w500,
+                          decoration: last ? null : TextDecoration.lineThrough,
+                        ),
+                      ),
+                      if (who != null)
+                        TextSpan(
+                          text: '  $who',
+                          style: const TextStyle(color: smartMuted),
+                        ),
+                    ],
+                  ),
+                  style: small,
+                ),
+              ),
+            ],
+          ),
+        );
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: smartGreen.withValues(alpha: 0.08),
+        border: Border.all(color: smartGreen.withValues(alpha: 0.35)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.check_circle, size: 18, color: smartGreen),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  record.corrected
+                      ? 'Telah dihantar dan dibetulkan '
+                            '${record.versions.length - 1}x'
+                      : 'Telah dihantar',
+                  style: small?.copyWith(
+                    color: smartGreen,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          line('Asal', original),
+          for (final (i, v) in record.versions.indexed)
+            line(
+              _fmtTime(v.sentAt),
+              v.edit.summary,
+              who: v.edit.pengawai,
+              last: i == record.versions.length - 1,
+            ),
+          const SizedBox(height: 6),
+          Text(
+            'Tersalah isi? Pilih nilai yang betul di bawah dan tekan Hantar.',
+            style: small?.copyWith(color: smartMuted),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Box at the top of the edit form for a lot with work kept on the device:
+/// a draft, an edit waiting for internet, or one the server refused.
+class _DraftNotice extends StatelessWidget {
+  final LotDraft draft;
+  final VoidCallback onDelete;
+
+  const _DraftNotice({required this.draft, required this.onDelete});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final when = _fmtTime(draft.updatedAt);
+    final (IconData icon, Color color, String text) = switch (draft) {
+      LotDraft(state: DraftState.menunggu) => (
+        Icons.schedule,
+        smartBlue,
+        'Menunggu internet untuk dihantar (disimpan $when). '
+            'Ia akan dihantar automatik.',
+      ),
+      LotDraft(:final error?) => (
+        Icons.error_outline,
+        smartOrange,
+        'Gagal dihantar: $error. Semak dan hantar semula.',
+      ),
+      _ => (
+        Icons.edit_note,
+        smartGoldDeep,
+        'Draf disimpan $when. Lengkapkan dan tekan Hantar.',
+      ),
+    };
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(10, 6, 4, 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: color,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: onDelete,
+            style: TextButton.styleFrom(
+              foregroundColor: smartMuted,
+              visualDensity: VisualDensity.compact,
+            ),
+            child: const Text('Padam draf'),
+          ),
+        ],
       ),
     );
   }
@@ -1219,46 +1872,88 @@ class _StatusOption extends StatelessWidget {
     required this.onTap,
   });
 
+  /// A short meaning under each status, so officers pick the right one.
+  static String _meaning(String status) => switch (status) {
+    'Bertoreh' => 'Pokok matang dan sedang ditoreh',
+    'Tidak Bertoreh' => 'Pokok matang tetapi tidak ditoreh',
+    'Getah Muda' => 'Pokok belum matang untuk ditoreh',
+    _ => '',
+  };
+
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final color = statusTorehanColor(status);
-    return InkWell(
-      borderRadius: BorderRadius.circular(10),
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
-        height: 44,
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(10),
-          color: selected ? color.withValues(alpha: 0.12) : null,
-          border: Border.all(
-            color: selected
-                ? color
-                : Theme.of(context).colorScheme.outlineVariant,
-            width: selected ? 1.5 : 1,
-          ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              selected ? Icons.check_circle : statusTorehanIcon(status),
-              color: color,
-              size: 18,
+    final outline = theme.colorScheme.outlineVariant;
+    return Semantics(
+      selected: selected,
+      button: true,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            color: selected ? color.withValues(alpha: 0.08) : null,
+            border: Border.all(
+              color: selected ? color : outline,
+              width: selected ? 1.5 : 1,
             ),
-            const SizedBox(width: 6),
-            Flexible(
-              child: Text(
-                status,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child: Icon(statusTorehanIcon(status), color: color, size: 18),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      status,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 1),
+                    Text(
+                      _meaning(status),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: smartMuted,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ),
-          ],
+              const SizedBox(width: 8),
+              // Radio mark: an empty ring, filled with a tick when chosen.
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                width: 20,
+                height: 20,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: selected ? color : null,
+                  border: Border.all(
+                    color: selected ? color : smartMuted.withValues(alpha: 0.6),
+                    width: 1.5,
+                  ),
+                ),
+                child: selected
+                    ? const Icon(Icons.check, size: 13, color: Colors.white)
+                    : null,
+              ),
+            ],
+          ),
         ),
       ),
     );

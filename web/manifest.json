@@ -1,11 +1,11 @@
 {
-    "name": "PPSKG",
-    "short_name": "PPSKG",
+    "name": "SmartMap",
+    "short_name": "SmartMap",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#2B2219",
     "theme_color": "#2B2219",
-    "description": "PPSKG - Lot Getah RISDA",
+    "description": "SmartMap - Lot Getah RISDA",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

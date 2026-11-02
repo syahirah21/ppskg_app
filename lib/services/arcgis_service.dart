@@ -136,6 +136,25 @@ class LotRecord {
     );
   }
 
+  /// The layer fields again, for keeping the lot on the device;
+  /// [LotRecord.fromAttributes] reads them back.
+  Map<String, dynamic> toAttributes() => {
+    'GlobalID': globalId,
+    'LOT_ID': lotId,
+    'NAMA': nama,
+    'NOKP': nokp,
+    'NO_LOT': noLot,
+    'MUKIM_TANAH': mukim,
+    'DAERAH': daerah,
+    'NEGERI': negeri,
+    'LUAS_TANAMAN': luas,
+    'STATUS_TOREHAN': statusTorehan,
+    'SRC_STATUS_TOREHAN': statusTorehanSource,
+    'NAMA_PENGAWAI': namaPengawai,
+    'TAHUN_TANAMAN': tahunTanam,
+    'no_permohonan_esrm': noPermohonan,
+  };
+
   /// Grant type from the start of LOT_ID, e.g. "KEKAL_1101070002148" ->
   /// "KEKAL" (the data has KEKAL and SAH).
   String get jenisGeran {
@@ -183,8 +202,12 @@ class ArcGisService {
       'Lot_Getah_Satu_Malaysia/FeatureServer/0';
 
   /// Values field officers can set for STATUS_TOREHAN (as stored in the
-  /// layer). 'Getah Muda' still exists in the data but isn't offered.
-  static const statusTorehanOptions = ['Bertoreh', 'Tidak Bertoreh'];
+  /// layer).
+  static const statusTorehanOptions = [
+    'Bertoreh',
+    'Tidak Bertoreh',
+    'Getah Muda',
+  ];
 
   /// While false, saving an edit only previews it and never writes to the
   /// live layer. Turn on only once edits are approved and login is in place.
@@ -335,6 +358,12 @@ class ArcGisService {
     }
     return body;
   }
+
+  /// A tiny request that succeeds only when the server can be reached.
+  Future<void> ping() => _query({
+    'where': '1=0',
+    'returnCountOnly': 'true',
+  }, timeout: const Duration(seconds: 10));
 
   /// Lot count and planted area grouped by [field], largest count first.
   Future<List<GroupStat>> groupBy(String field, {String where = '1=1'}) async {

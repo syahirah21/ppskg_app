@@ -15,6 +15,9 @@ const Color smartMuted = Color(0xFF8A7C68);
 const Color smartGreen = Color(0xFF3F8F46);
 const Color smartOrange = Color(0xFFE67E1A);
 
+/// Edits waiting on the device to be sent (Cari & Kemaskini drafts).
+const Color smartBlue = Color(0xFF3B6EA8);
+
 /// Windows at least this wide (laptops, desktops) get the desktop layout:
 /// a sidebar instead of the bottom bar, and multi-column pages.
 const double desktopBreakpoint = 900;

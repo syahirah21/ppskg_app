@@ -85,7 +85,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   onSubmitted: (_) => _passwordFocus.requestFocus(),
                   decoration: _decoration(
                     theme,
-                    hint: 'cth: ali.ahmad',
+                    hint: 'No. ID atau No. Pekerja',
                     icon: Icons.person_outline,
                   ),
                 ),
@@ -209,7 +209,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         Image.asset('assets/images/risda_logo.png', height: 72),
                         const SizedBox(height: 14),
                         Text(
-                          'PPSKG',
+                          'SmartMap',
                           style: theme.textTheme.headlineSmall?.copyWith(
                             color: Colors.white,
                             fontWeight: FontWeight.w800,
@@ -301,7 +301,7 @@ class _BrandPanel extends StatelessWidget {
                     Image.asset('assets/images/risda_logo.png', height: 84),
                     const SizedBox(height: 24),
                     Text(
-                      'PPSKG',
+                      'SmartMap',
                       style: theme.textTheme.displaySmall?.copyWith(
                         color: Colors.white,
                         fontWeight: FontWeight.w800,

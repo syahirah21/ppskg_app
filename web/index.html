@@ -6,19 +6,19 @@
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="description" content="PPSKG - Lot Getah RISDA">
+  <meta name="description" content="SmartMap - Lot Getah RISDA">
   <meta name="theme-color" content="#2B2219">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="PPSKG">
+  <meta name="apple-mobile-web-app-title" content="SmartMap">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>PPSKG</title>
+  <title>SmartMap</title>
   <link rel="manifest" href="manifest.json">
 
   <style>
@@ -51,6 +51,15 @@
       var s = document.getElementById('splash');
       if (s) s.remove();
     });
+  </script>
+  <script>
+    // Keeps a copy of the site so it opens without internet (see
+    // offline_sw.js). Browsers only allow this on https or localhost.
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('offline_sw.js').catch(function (e) {
+        console.warn('Offline mode unavailable:', e);
+      });
+    }
   </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>

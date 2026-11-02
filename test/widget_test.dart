@@ -158,8 +158,12 @@ void main() {
     expect(layer['drawingInfo']['renderer']['field1'], 'STATUS_TOREHAN');
   });
 
-  test('officers can only choose Bertoreh or Tidak Bertoreh', () {
-    expect(ArcGisService.statusTorehanOptions, ['Bertoreh', 'Tidak Bertoreh']);
+  test('officers choose from the three layer statuses', () {
+    expect(ArcGisService.statusTorehanOptions, [
+      'Bertoreh',
+      'Tidak Bertoreh',
+      'Getah Muda',
+    ]);
   });
 
   test('update matches by GlobalID and records source and officer', () {

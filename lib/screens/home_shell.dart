@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../services/auth_service.dart';
+import '../services/draft_service.dart';
 import '../theme.dart';
 import '../widgets/profile_drawer.dart';
 import 'dashboard_screen.dart';
@@ -16,6 +17,21 @@ typedef _Destination = ({
   String label,
   String subtitle,
 });
+
+/// The Cari & Kemaskini tab, which shows how many drafts are on the device.
+const _searchTab = 2;
+
+/// Number badge for the drafts kept on this device; nothing when there are
+/// none.
+Widget _withDraftBadge(Widget icon) => ValueListenableBuilder(
+  valueListenable: DraftService.drafts,
+  builder: (context, drafts, _) => Badge(
+    isLabelVisible: drafts.isNotEmpty,
+    label: Text('${drafts.length}'),
+    backgroundColor: smartBlue,
+    child: icon,
+  ),
+);
 
 const List<_Destination> _destinations = [
   (
@@ -105,10 +121,14 @@ class _HomeShellState extends State<HomeShell> {
               selectedIndex: _index,
               onDestinationSelected: _select,
               destinations: [
-                for (final d in _destinations)
+                for (final (i, d) in _destinations.indexed)
                   NavigationDestination(
-                    icon: Icon(d.icon),
-                    selectedIcon: Icon(d.selectedIcon),
+                    icon: i == _searchTab
+                        ? _withDraftBadge(Icon(d.icon))
+                        : Icon(d.icon),
+                    selectedIcon: i == _searchTab
+                        ? _withDraftBadge(Icon(d.selectedIcon))
+                        : Icon(d.selectedIcon),
                     label: d.label,
                   ),
               ],
@@ -151,7 +171,7 @@ class _Sidebar extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'PPSKG',
+                        'SmartMap',
                         style: theme.textTheme.titleMedium?.copyWith(
                           color: Colors.white,
                           fontWeight: FontWeight.w800,
@@ -187,6 +207,7 @@ class _Sidebar extends StatelessWidget {
               destination: d,
               selected: i == selected,
               onTap: () => onSelect(i),
+              showDrafts: i == _searchTab,
             ),
           const Spacer(),
           const Padding(
@@ -204,16 +225,25 @@ class _SidebarItem extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
 
+  /// Puts the number of drafts on the device on the icon.
+  final bool showDrafts;
+
   const _SidebarItem({
     required this.destination,
     required this.selected,
     required this.onTap,
+    this.showDrafts = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final fg = selected ? smartInk : Colors.white;
+    final icon = Icon(
+      selected ? destination.selectedIcon : destination.icon,
+      size: 22,
+      color: selected ? smartInk : smartGold,
+    );
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
       child: Material(
@@ -227,11 +257,7 @@ class _SidebarItem extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             child: Row(
               children: [
-                Icon(
-                  selected ? destination.selectedIcon : destination.icon,
-                  size: 22,
-                  color: selected ? smartInk : smartGold,
-                ),
+                showDrafts ? _withDraftBadge(icon) : icon,
                 const SizedBox(width: 14),
                 Expanded(
                   child: Column(

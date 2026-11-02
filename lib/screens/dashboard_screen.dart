@@ -2,6 +2,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 
 import '../services/arcgis_service.dart';
+import '../services/draft_service.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
 import '../widgets/negeri_picker.dart';
@@ -145,7 +146,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 SliverFillRemaining(
                   hasScrollBody: false,
                   child: _ErrorView(
-                    message: '${snap.error}',
+                    message: DraftService.describeError(snap.error!),
                     onRetry: _refresh,
                   ),
                 )
